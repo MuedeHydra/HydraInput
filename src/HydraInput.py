@@ -26,12 +26,12 @@ layer = 0
 
 # controller modus (disable mouse and mapping)
 controller_modus = 0
+grabed: bool = False
 
 MOUSE_CAPABILITIES = {
     e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL],
     e.EV_KEY: evdev.ecodes.keys.keys()
 }
-
 
 
 ui = evdev.UInput()
@@ -145,6 +145,32 @@ def move_mouse():
  
 
 
+def grab_controller(dev, status=2):
+    """status = 0 off, 1, on, 2 toggle"""
+    global grabed
+    if status == 2:
+        status = not(grabed)
+    if status:
+        try:
+            dev.grab() # Gerät greifen, um Events zu unterdrücken
+            print("Controller gegrabbt: Original-Inputs werden unterdrückt.")
+            grabed = True
+        except OSError as err:
+            print(f"Warnung: Konnte Controller nicht grabben (Benötigt Root-Rechte oder CAP_SYS_RAWIO): {err}")
+            print("Original-Controller-Inputs werden weiterhin an das System gesendet.")
+            # Wenn grabben fehlschlägt, setzen wir den Modus zurück, um Verwirrung zu vermeiden
+            grabed = False
+    else:
+        try:
+            dev.ungrab() # Gerät freigeben
+            print("Controller freigegeben: Original-Inputs werden wieder an das System gesendet.")
+            grabed = False
+        except OSError as err:
+            print(f"Warnung: Konnte Controller nicht freigeben: {err}")
+                
+    time.sleep(0.2)
+
+
 def send_key(button, state):
     global layer, controller_modus
 
@@ -175,7 +201,7 @@ def send_key(button, state):
 def main():
     global conf
     global e, ui
-    global controller_axes
+    global controller_axes, grabed
 
 
     conf = read_conf()
@@ -219,6 +245,9 @@ def main():
     try:
         # Events vom Controller lesen und verarbeiten
         for event in dev.read_loop():
+            if controller_modus == grabed:
+                grab_controller(dev)
+
             # Joystick-Achsen-Events verarbeiten
             if event.type == e.EV_ABS:
                 if event.code == e.ABS_X:
@@ -268,6 +297,9 @@ def main():
     except KeyboardInterrupt:
         print("\nBeendet durch Benutzer.")
     finally:
+        if grabed:
+            grab_controller(dev, 0)
+
         if 'dev' in locals() and dev:
             dev.close()
             print(f"Controller {dev.name} geschlossen.")
