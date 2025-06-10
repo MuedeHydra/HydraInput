@@ -2,7 +2,7 @@
 
 from conf_reader import conf_reader
 import evdev
-from evdev import InputDevice, UInput, ecodes as e
+from evdev import ecodes as e
 import numpy as np
 import time
 import threading
@@ -21,46 +21,58 @@ AXIS_DEADZONE = 1000
 # daten der achsen [X, Y, RX, RY]
 controller_axes = [0, 0, 0 ,0]
 
+# for second layer
+layer = 0
+
+# controller modus (disable mouse and mapping)
+controller_modus = 0
+
 MOUSE_CAPABILITIES = {
     e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL, e.REL_HWHEEL],
-    e.EV_KEY: evdev.ecodes.keys.keys(), # <-- NEU: Alle bekannten Tastencodes verwenden
-    # e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE,
-    #            e.KEY_UP, e.KEY_DOWN, e.KEY_RIGHT, e.KEY_LEFT,
-    #            e.KEY_LEFTMETA, e.KEY_LEFTCTRL, e.KEY_LEFTSHIFT,
-    #            e.KEY_NEXTSONG, e.KEY_PREVIOUSSONG, e.KEY_PLAYPAUSE,
-    #            e.KEY_VOLUMEUP, e.KEY_VOLUMEDOWN, e.KEY_MUTE, ],
+    e.EV_KEY: evdev.ecodes.keys.keys()
 }
 
 
-BUTTON_MAPPING = {
-    e.BTN_A: e.BTN_LEFT,    # A-Taste (Xbox) / X-Taste (PS) -> Linksklick
-    e.BTN_B: e.BTN_RIGHT,   # B-Taste (Xbox) / Kreis-Taste (PS) -> Rechtsklick
-    e.BTN_X: e.KEY_E,
-    e.BTN_Y: e.KEY_R,
 
-    e.BTN_START: e.KEY_ENTER,
-    e.BTN_SELECT: e.BTN_RIGHT,
-    e.BTN_MODE: e.BTN_RIGHT,
-    167: e.BTN_RIGHT,       # Record
+ui = evdev.UInput()
 
-    "up": e.KEY_UP,
-    "down": e.KEY_DOWN,
-    "right": e.KEY_RIGHT,
-    "left": e.KEY_LEFT,
+def read_conf():
+    try:
+        conf = conf_reader(os.path.expanduser("~/.config/HydraInput/HydraInput.conf"))
+        return conf
+    except FileNotFoundError:
+        print("Could not open the configuration file:\t/home/username/.config/HydraInput/HydraInput.conf\n\tTrying to load the default configuration file.")
 
-    e.ABS_Z: e.KEY_LEFTCTRL,
-    # e.BTN_TL: e.KEY_PREVIOUSSONG,
-    e.BTN_TL: e.KEY_LEFTMETA,
-    e.BTN_THUMBL: e.KEY_PAUSE,
-
-    e.ABS_RZ: e.KEY_LEFTSHIFT,
-    # e.BTN_TR: e.KEY_NEXTSONG,
-    e.BTN_TR: e.KEY_ENTER,
-    e.BTN_THUMBR: e.BTN_MIDDLE
-}
+    conf = conf_reader(f"{os.path.dirname(__file__)}/HydraInput.conf")
+    return conf
 
 
-ui = 0
+def encode_conf_def(data):
+    di = {}
+    key = 0
+    action = 0
+    for i in data:
+        if i in  ["up", "down", "left", "right"]:
+            key = i
+        else:
+            key = getattr(e, i)
+
+        if data[i] in  ["SwitchMode", "SecondLayer"]:
+            action = data[i]
+        else:
+            action = getattr(e, data[i])
+
+        di[key] = action
+    return di
+
+
+
+def encode_conf(conf):
+    conf["default_layer_encod"] = encode_conf_def(conf["default_layer"])
+    conf["second_layer_encod"] = encode_conf_def(conf["second_layer"])
+    return conf
+
+
 
 def find_controller_device(partial_name='controller'):
     """Findet einen Controller-Gerätepfad basierend auf einem Teil des Namens."""
@@ -83,7 +95,7 @@ def init_controller():
             print("Fehler: Kein Controller-Pfad konfiguriert oder gefunden. Bitte einstellen.")
             exit(1)
 
-def center_controller(dev, e, controller_axes):
+def center_controller(dev, controller_axes):
     # Joystick-Achsenbereiche ermitteln
     absinfo_x = dev.absinfo(e.ABS_X)
     absinfo_y = dev.absinfo(e.ABS_Y)
@@ -112,11 +124,13 @@ def center_controller(dev, e, controller_axes):
 
 
 def move_mouse():
-    global e, controller_axes, ui
+    global controller_axes, ui
     t = time.time()
 
     while True:
         time.sleep(0.005)
+        if controller_modus:
+            continue
         if(time.time() >= t + 0.1):
             ui.write(e.EV_REL, e.REL_HWHEEL, int(np.interp(controller_axes[0], [-32768, 32768], [-1 * conf["SCROLL_SENSITIVITY"], conf["SCROLL_SENSITIVITY"]])))
             if conf["SCROLL_INVERT"]:
@@ -131,13 +145,41 @@ def move_mouse():
  
 
 
+def send_key(button, state):
+    global layer, controller_modus
+
+    if layer == 0:
+        BUTTON_MAPPING = conf["default_layer_encod"]
+    else:
+        BUTTON_MAPPING = conf["second_layer_encod"]
+    
+    # print(BUTTON_MAPPING)
+    action = BUTTON_MAPPING[button]
+
+    if action == "SwitchMode":
+        if state:
+            controller_modus = not(controller_modus)
+            print(f"{controller_modus = }")
+    elif controller_modus:
+        return
+    elif action == "SecondLayer":
+        layer = state
+        print(f"{layer = }")
+    else:
+        # print(f"action = {action}\t | {state}")
+        ui.write(e.EV_KEY, action, state)
+        ui.syn()
+
+
+
 def main():
     global conf
     global e, ui
     global controller_axes
 
-    conf = conf_reader(os.path.expanduser("~/.config/HydraInput/HydraInput.conf"))
 
+    conf = read_conf()
+    conf = encode_conf(conf)
     init_controller()
 
     try:
@@ -152,24 +194,24 @@ def main():
         print("Stelle sicher, dass du in der 'input'-Gruppe bist oder das Skript mit sudo ausführst (nicht empfohlen für Dauerbetrieb).")
         return
 
-    center_controller(dev, e, controller_axes)
+    center_controller(dev, controller_axes)
 
     # Virtuelles Mausgerät erstellen
     try:
-        ui = UInput(MOUSE_CAPABILITIES, name='Controller_Mouse_Evdev', vendor=0x1234, product=0x5678, version=1)
-        print("Virtuelle Maus 'Controller_Mouse_Evdev' erstellt.")
+        ui = evdev.UInput(MOUSE_CAPABILITIES, name="Muede_Mouse_Keyboard", vendor=0x1234, product=0x5678, version=1)
+        print("The virtual mouse 'Controller_Mouse_Keyboard_Evdev' has been created.")
     except PermissionError:
-        print("Fehler: Keine Berechtigung, /dev/uinput zu erstellen.")
-        print("Stelle sicher, dass du in der 'input'-Gruppe bist und die Udev-Regel aktiv ist, oder führe mit sudo aus.")
+        print("Error: No authorization to create /dev/uinput.")
+        print("Make sure you are in the ‘input’ group and the udev rule is active, or run with sudo (Not recomendet).")
         dev.close()
         return
     except Exception as e:
-        print(f"Fehler beim Erstellen der virtuellen Maus: {e}")
+        print(f"Error when creating the virtual device: {e}")
         dev.close()
         return
 
 
-    print("\nController-Maussteuerung aktiv. Drücke Strg+C, um zu beenden.")
+    print("\nController mouse control active. Press Ctrl+C to exit.")
 
 
     threading.Thread(target=move_mouse, daemon=True).start()
@@ -191,62 +233,37 @@ def main():
                 # D-Pad
                 elif event.code == e.ABS_HAT0X:
                     if event.value == 1:
-                        action = BUTTON_MAPPING["right"]
-                        ui.write(e.EV_KEY, action, 1)
-                        ui.syn()
+                        send_key("right", 1)
                     elif event.value == -1:
-                        action = BUTTON_MAPPING["left"]
-                        ui.write(e.EV_KEY, action, 1)
-                        ui.syn()
+                        send_key("left", 1)
                     else:
-                        action = BUTTON_MAPPING["right"]
-                        ui.write(e.EV_KEY, action, 0)
-                        action = BUTTON_MAPPING["left"]
-                        ui.write(e.EV_KEY, action, 0)
-                        ui.syn()
+                        send_key("right", 0)
+                        send_key("left", 0)
 
                 elif event.code == e.ABS_HAT0Y:
                     if event.value == -1:
-                        action = BUTTON_MAPPING["up"]
-                        ui.write(e.EV_KEY, action, 1)
-                        ui.syn()
+                        send_key("up", 1)
                     elif event.value == 1:
-                        action = BUTTON_MAPPING["down"]
-                        ui.write(e.EV_KEY, action, 1)
-                        ui.syn()
+                        send_key("down", 1)
                     else:
-                        action = BUTTON_MAPPING["up"]
-                        ui.write(e.EV_KEY, action, 0)
-                        action = BUTTON_MAPPING["down"]
-                        ui.write(e.EV_KEY, action, 0)
-                        ui.syn()
+                        send_key("up", 0)
+                        send_key("down", 0)
 
                 elif event.code == e.ABS_Z:
                     if event.value <= 10:
-                        action = BUTTON_MAPPING[event.code]
-                        ui.write(e.EV_KEY, action, 0)
-                        ui.syn()
+                        send_key(event.code, 0)
                     elif event.value >= 1000:
-                        action = BUTTON_MAPPING[event.code]
-                        ui.write(e.EV_KEY, action, 1)
-                        ui.syn()
-
+                        send_key(event.code, 1)
 
                 elif event.code == e.ABS_RZ:
                     if event.value <= 10:
-                        action = BUTTON_MAPPING[event.code]
-                        ui.write(e.EV_KEY, action, 0)
-                        ui.syn()
+                        send_key(event.code, 0)
                     elif event.value >= 1000:
-                        action = BUTTON_MAPPING[event.code]
-                        ui.write(e.EV_KEY, action, 1)
-                        ui.syn()
+                        send_key(event.code, 1)
 
             # Tasten-Events verarbeiten
             elif event.type == e.EV_KEY:
-                action = BUTTON_MAPPING[event.code]
-                ui.write(e.EV_KEY, action, event.value)
-                ui.syn()
+                send_key(event.code, event.value)
 
     except KeyboardInterrupt:
         print("\nBeendet durch Benutzer.")
