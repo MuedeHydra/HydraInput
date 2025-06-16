@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 from conf_reader import conf_reader
 import evdev
@@ -18,8 +18,8 @@ SCROLL_SENSITIVITY = 1
 # Schwellenwert für Joystick-Achsen (um "drift" zu vermeiden, wenn Joystick nicht ganz zentriert ist)
 AXIS_DEADZONE = 1000
 
-# daten der achsen [X, Y, RX, RY]
-controller_axes = [0, 0, 0 ,0]
+# daten der achsen [X, Y, RX, RY, Z, RZ]
+controller_axes = [[], [], [], [], 0, 0]
 
 # for second layer
 layer = 0
@@ -34,7 +34,9 @@ MOUSE_CAPABILITIES = {
 }
 
 
-ui = evdev.UInput()
+# init global var: ui
+ui = 0
+
 
 def read_conf():
     try:
@@ -52,12 +54,12 @@ def encode_conf_def(data):
     key = 0
     action = 0
     for i in data:
-        if i in  ["up", "down", "left", "right"]:
+        if i in ["up", "down", "left", "right"]:
             key = i
         else:
             key = getattr(e, i)
 
-        if data[i] in  ["SwitchMode", "SecondLayer"]:
+        if data[i] in ["SwitchMode", "SecondLayer"]:
             action = data[i]
         else:
             action = getattr(e, data[i])
@@ -66,18 +68,20 @@ def encode_conf_def(data):
     return di
 
 
-
 def encode_conf(conf):
     conf["default_layer_encod"] = encode_conf_def(conf["default_layer"])
     conf["second_layer_encod"] = encode_conf_def(conf["second_layer"])
     return conf
 
 
-
 def find_controller_device(partial_name='controller'):
     """Findet einen Controller-Gerätepfad basierend auf einem Teil des Namens."""
     devices = [evdev.InputDevice(fn) for fn in evdev.list_devices()]
     for device in devices:
+        if "touchpad" in device.name.lower():
+            continue
+        if "motion sensors" in device.name.lower():
+            continue
         if partial_name.lower() in device.name.lower() or 'joystick' in device.name.lower():
             print(f"Gefundenen Controller: {device.name} ({device.path})")
             return device.path
@@ -95,13 +99,14 @@ def init_controller():
             print("Fehler: Kein Controller-Pfad konfiguriert oder gefunden. Bitte einstellen.")
             exit(1)
 
+
 def center_controller(dev, controller_axes):
     # Joystick-Achsenbereiche ermitteln
     absinfo_x = dev.absinfo(e.ABS_X)
     absinfo_y = dev.absinfo(e.ABS_Y)
     absinfo_rx = dev.absinfo(e.ABS_X)
     absinfo_ry = dev.absinfo(e.ABS_Y)
-    
+
     # Standardwerte, falls Achseninfos nicht verfügbar sind (sollten aber bei Joysticks sein)
     min_x, max_x = absinfo_x.min, absinfo_x.max
     min_y, max_y = absinfo_y.min, absinfo_y.max
@@ -117,10 +122,12 @@ def center_controller(dev, controller_axes):
     print(f"Empfindlichkeit: {MOUSE_SENSITIVITY}, Deadzone: {AXIS_DEADZONE}")
 
     # Aktuelle Joystick-Achsenwerte speichern
-    controller_axes[0] = center_x
-    controller_axes[1] = center_y
-    controller_axes[2] = center_rx
-    controller_axes[3] = center_ry
+    controller_axes[0] = [center_x, min_x, max_x]
+    controller_axes[1] = [center_y, min_y, max_y]
+    controller_axes[2] = [center_rx, min_rx, max_rx]
+    controller_axes[3] = [center_ry, min_ry, max_ry]
+    controller_axes[4] = dev.absinfo(e.ABS_Z).max
+    controller_axes[5] = dev.absinfo(e.ABS_RZ).max
 
 
 def move_mouse():
@@ -131,28 +138,27 @@ def move_mouse():
         time.sleep(0.005)
         if controller_modus:
             continue
-        if(time.time() >= t + 0.1):
-            ui.write(e.EV_REL, e.REL_HWHEEL, int(np.interp(controller_axes[0], [-32768, 32768], [-1 * conf["SCROLL_SENSITIVITY"], conf["SCROLL_SENSITIVITY"]])))
+        if time.time() >= t + 0.1:
+            ui.write(e.EV_REL, e.REL_HWHEEL, int(np.interp(controller_axes[0][0], [controller_axes[0][1], controller_axes[0][2]], [-1 * conf["SCROLL_SENSITIVITY"], conf["SCROLL_SENSITIVITY"]])))
             if conf["SCROLL_INVERT"]:
-                ui.write(e.EV_REL, e.REL_WHEEL, int(np.interp(controller_axes[1], [-32768, 32768], [conf["SCROLL_SENSITIVITY"], -1 * conf["SCROLL_SENSITIVITY"]])))
+                ui.write(e.EV_REL, e.REL_WHEEL, int(np.interp(controller_axes[1][0], [controller_axes[1][1], controller_axes[1][2]], [conf["SCROLL_SENSITIVITY"], -1 * conf["SCROLL_SENSITIVITY"]])))
             else:
-                ui.write(e.EV_REL, e.REL_WHEEL, int(np.interp(controller_axes[1], [-32768, 32768], [-1 * conf["SCROLL_SENSITIVITY"], conf["SCROLL_SENSITIVITY"]])))
+                ui.write(e.EV_REL, e.REL_WHEEL, int(np.interp(controller_axes[1][0], [controller_axes[1][1], controller_axes[1][2]], [-1 * conf["SCROLL_SENSITIVITY"], conf["SCROLL_SENSITIVITY"]])))
             t = time.time()
 
-        ui.write(e.EV_REL, e.REL_X, int(np.interp(controller_axes[2], [-32768, 32768], [-1 * conf["MOUSE_SENSITIVITY"], conf["MOUSE_SENSITIVITY"]])))
-        ui.write(e.EV_REL, e.REL_Y, int(np.interp(controller_axes[3], [-32768, 32768], [-1 * conf["MOUSE_SENSITIVITY"], conf["MOUSE_SENSITIVITY"]])))
+        ui.write(e.EV_REL, e.REL_X, int(np.interp(controller_axes[2][0], [controller_axes[2][1], controller_axes[2][2]], [-1 * conf["MOUSE_SENSITIVITY"], conf["MOUSE_SENSITIVITY"]])))
+        ui.write(e.EV_REL, e.REL_Y, int(np.interp(controller_axes[3][0], [controller_axes[3][1], controller_axes[3][2]], [-1 * conf["MOUSE_SENSITIVITY"], conf["MOUSE_SENSITIVITY"]])))
         ui.syn()
- 
 
 
 def grab_controller(dev, status=2):
     """status = 0 off, 1, on, 2 toggle"""
     global grabed
     if status == 2:
-        status = not(grabed)
+        status = not grabed
     if status:
         try:
-            dev.grab() # Gerät greifen, um Events zu unterdrücken
+            dev.grab()  # Gerät greifen, um Events zu unterdrücken
             print("Controller gegrabbt: Original-Inputs werden unterdrückt.")
             grabed = True
         except OSError as err:
@@ -162,23 +168,29 @@ def grab_controller(dev, status=2):
             grabed = False
     else:
         try:
-            dev.ungrab() # Gerät freigeben
+            dev.ungrab()  # Gerät freigeben
             print("Controller freigegeben: Original-Inputs werden wieder an das System gesendet.")
             grabed = False
         except OSError as err:
             print(f"Warnung: Konnte Controller nicht freigeben: {err}")
-                
+
     time.sleep(0.2)
 
 
 def send_key(button, state):
     global layer, controller_modus
 
+    # for PS controller
+    if button == e.BTN_TL2:
+        return
+    if button == e.BTN_TR2:
+        return
+
     if layer == 0:
         BUTTON_MAPPING = conf["default_layer_encod"]
     else:
         BUTTON_MAPPING = conf["second_layer_encod"]
-    
+
     # print(BUTTON_MAPPING)
     action = BUTTON_MAPPING[button]
 
@@ -197,12 +209,10 @@ def send_key(button, state):
         ui.syn()
 
 
-
 def main():
     global conf
     global e, ui
     global controller_axes, grabed
-
 
     conf = read_conf()
     conf = encode_conf(conf)
@@ -236,9 +246,7 @@ def main():
         dev.close()
         return
 
-
     print("\nController mouse control active. Press Ctrl+C to exit.")
-
 
     threading.Thread(target=move_mouse, daemon=True).start()
 
@@ -251,14 +259,14 @@ def main():
             # Joystick-Achsen-Events verarbeiten
             if event.type == e.EV_ABS:
                 if event.code == e.ABS_X:
-                    controller_axes[0] = event.value
+                    controller_axes[0][0] = event.value
                 elif event.code == e.ABS_Y:
-                    controller_axes[1] = event.value
+                    controller_axes[1][0] = event.value
                 elif event.code == e.ABS_RX:
-                    controller_axes[2] = event.value
+                    controller_axes[2][0] = event.value
                 elif event.code == e.ABS_RY:
-                    controller_axes[3] = event.value
-                
+                    controller_axes[3][0] = event.value
+
                 # D-Pad
                 elif event.code == e.ABS_HAT0X:
                     if event.value == 1:
@@ -281,13 +289,13 @@ def main():
                 elif event.code == e.ABS_Z:
                     if event.value <= 10:
                         send_key(event.code, 0)
-                    elif event.value >= 1000:
+                    elif event.value >= controller_axes[4] * 0.9:
                         send_key(event.code, 1)
 
                 elif event.code == e.ABS_RZ:
                     if event.value <= 10:
                         send_key(event.code, 0)
-                    elif event.value >= 1000:
+                    elif event.value >= controller_axes[5] * 0.9:
                         send_key(event.code, 1)
 
             # Tasten-Events verarbeiten
@@ -307,6 +315,6 @@ def main():
             ui.close()
             print("Virtuelle Maus geschlossen.")
 
+
 if __name__ == "__main__":
     main()
-    
