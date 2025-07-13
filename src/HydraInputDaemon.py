@@ -2,6 +2,7 @@ import numpy as np
 import threading
 import socket
 import time
+import sys
 import os
 import select
 import evdev
@@ -33,8 +34,12 @@ MOUSE_CAPABILITIES = {
 # init global var: ui
 ui = 0
 
-def read_conf():
+def read_conf(conf_path):
     try:
+        if conf_path:
+            conf = conf_reader(os.path.expanduser(conf_path))
+            return conf
+
         conf = conf_reader(os.path.expanduser("~/.config/HydraInput/HydraInput.conf"))
         return conf
     except FileNotFoundError:
@@ -64,8 +69,8 @@ def encode_conf_def(data):
     return di
 
 
-def load_conf():
-    conf = read_conf()
+def load_conf(conf_path=None):
+    conf = read_conf(conf_path)
     conf["default_layer_encod"] = encode_conf_def(conf["default_layer"])
     conf["second_layer_encod"] = encode_conf_def(conf["second_layer"])
     return conf
@@ -322,12 +327,12 @@ def controll_controller(devices, pipe_read_fd):
 
 
 
-def run_controller(conf, pipe_read_fd):
+def run_controller(conf, pipe_read_fd) -> list:
     controller_feedback = init_controller(conf)
     if controller_feedback == 0:
         pass
     elif controller_feedback == 1:
-        return
+        return []
     elif controller_feedback == 2:
         pass
 
@@ -363,9 +368,12 @@ def move_mouse():
 
 def main():
     global conf, ui
-    SOCKET_FILE = os.path.expanduser("/home/tzwicker/python/HydraInput/src/Hydra.sock")
+    SOCKET_FILE = "/tmp/HydraInput.sock"
     last_update = time.time()
-    conf = load_conf()
+    conf_path = None
+    if len(sys.argv) >= 2:
+        conf_path = sys.argv[1]
+    conf = load_conf(conf_path)
 
     try:
         server_socket, feedback = init_socket(SOCKET_FILE)
@@ -391,28 +399,37 @@ def main():
                 message = data.decode('utf-8')
                 print(f"Empfangen: '{message}'")
 
-                response = "running"
-                connection.sendall(response.encode('utf-8'))
+                if message != "status":
+                    response = "running"
+                    connection.sendall(response.encode('utf-8'))
 
                 if message == "kill":
                     break
 
                 elif message == "reload":
-                    conf = load_conf()
+                    conf = load_conf(conf_path)
+
+                elif message.startswith("conf"):
+                    conf_path = message.removeprefix("conf ")
+                    conf = load_conf(conf_path)
 
                 elif message == "status":
-                    pass
+                    if thread_status[0] == 0:
+                        response = "No device captured"
+                    else:
+                        response = "Verbunden mit:$$$"
+                        for i in dev[:-1]:
+                            response += f"{i.path}${i.name}$$$"
+                    connection.sendall(response.encode('utf-8'))
 
                 elif message == "update":
-                    if time.time() <= last_update + 2:
+                    if time.time() <= last_update + 3:
                         print("zu schnelles updaten!")
                     else:
                         print("update ...")
+                        time.sleep(1)
                         if thread_status[0] == 0:
                             dev = run_controller(conf, pipe_read_fd)
-
-
-                        # update()
 
                     last_update = time.time()
 

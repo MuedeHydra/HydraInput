@@ -1,5 +1,6 @@
 import argparse
 import socket
+import subprocess
 import os
 
 
@@ -13,7 +14,7 @@ def init_parser():
     parser.add_argument('-s', '--status', required=False, default=False, action="store_true", help="Print status from daemon")
     parser.add_argument('-u', '--update', required=False, default=False, action="store_true", help="update device list")
     parser.add_argument('-k', '--kill', required=False, default=False, action="store_true", help="update device list")
-    # parser.add_argument('-c', '--conf', required=False, metavar="path", help="Load a config by path.")
+    parser.add_argument('-c', '--conf', required=False, metavar="path", help="Load a config by path.")
 
 
     return parser.parse_args()
@@ -53,7 +54,7 @@ def send_msg(SOCKET_FILE: str, msg: str, no_print: bool = False):
 
 
 def main():
-    SOCKET_FILE = os.path.expanduser("~/python/HydraInput/src/Hydra.sock")
+    SOCKET_FILE = "/tmp/HydraInput.sock"
 
     args = init_parser()
 
@@ -64,12 +65,26 @@ def main():
             print("Der Daemon läuft bereits.")
         else:
             print("Daemon wird gestartet.")
+            python = os.path.expanduser("~/python/test-venv/bin/python")
+            daemon = os.path.expanduser("~/python/HydraInput/src/HydraInputDaemon.py")
+            launch = [python, daemon]
+            if args.conf:
+                launch.append(args.conf)
+            subprocess.Popen(launch,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             preexec_fn=os.setpgrp
+                             )
+
+    elif args.conf:
+        send_msg(SOCKET_FILE, f"conf {args.conf}")
 
     elif args.reload:
         send_msg(SOCKET_FILE, "reload")
 
     elif args.status:
-        feedback = send_msg(SOCKET_FILE, "status")
+        feedback = str(send_msg(SOCKET_FILE, "status"))
+        feedback = feedback.replace("$$$", "\n").replace("$", "\t").rstrip("\n")
         print(feedback)
 
     elif args.update:
