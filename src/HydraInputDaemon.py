@@ -363,7 +363,7 @@ def move_mouse():
 
 def main():
     global conf, ui
-    SOCKET_FILE = "/home/tzwicker/python/HydraInput/src/Hydra.sock"
+    SOCKET_FILE = os.path.expanduser("/home/tzwicker/python/HydraInput/src/Hydra.sock")
     last_update = time.time()
     conf = load_conf()
 

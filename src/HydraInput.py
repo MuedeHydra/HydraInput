@@ -1,5 +1,6 @@
 import argparse
 import socket
+import os
 
 
 def init_parser():
@@ -52,7 +53,7 @@ def send_msg(SOCKET_FILE: str, msg: str, no_print: bool = False):
 
 
 def main():
-    SOCKET_FILE = "/home/tzwicker/python/HydraInput/src/Hydra.sock"
+    SOCKET_FILE = os.path.expanduser("~/python/HydraInput/src/Hydra.sock")
 
     args = init_parser()
 
